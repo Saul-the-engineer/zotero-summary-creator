@@ -169,47 +169,53 @@ class ContentFilterService {
 
   /**
    * Check if paragraph is quality content worth reading
+   * Made more lenient to preserve body paragraphs
    */
   isParagraphQuality(para) {
     const trimmed = para.trim();
 
-    // Too short
-    if (trimmed.length < 50) {
+    // Too short - but be lenient
+    if (trimmed.length < 30) {
       return false;
     }
 
-    // All caps (likely a heading or section marker)
-    if (trimmed === trimmed.toUpperCase() && trimmed.length < 100) {
+    // All caps SHORT text (likely a heading or section marker)
+    // But allow longer all-caps paragraphs (might be acronym-heavy technical text)
+    if (trimmed === trimmed.toUpperCase() && trimmed.length < 50) {
       return false;
     }
 
-    // Too many numbers (likely a table or data)
+    // Too many numbers (likely a table or data) - but be more lenient
     const numberCount = (trimmed.match(/\d/g) || []).length;
-    if (numberCount / trimmed.length > 0.3) {
+    if (numberCount / trimmed.length > 0.5) {  // Changed from 0.3 to 0.5
       return false;
     }
 
     // Too many citation markers (citation-heavy line)
     const citationCount = (trimmed.match(/\[\d+\]/g) || []).length;
-    if (citationCount > 5) {
+    if (citationCount > 8) {  // Changed from 5 to 8
       return false;
     }
 
-    // Check for common article words (indicates prose)
-    const articleWords = ['the', 'a', 'an', 'this', 'these', 'that', 'those', 'we', 'our', 'is', 'are', 'was', 'were'];
+    // Check for common words (indicates prose) - expanded list
+    const commonWords = ['the', 'a', 'an', 'this', 'these', 'that', 'those', 'we', 'our', 'is', 'are', 'was', 'were',
+                         'in', 'on', 'at', 'by', 'for', 'with', 'from', 'to', 'of', 'and', 'or', 'but',
+                         'can', 'will', 'may', 'has', 'have', 'had', 'do', 'does', 'did'];
     const lowerPara = trimmed.toLowerCase();
-    const hasArticles = articleWords.some(word => lowerPara.includes(` ${word} `));
+    const hasCommonWords = commonWords.some(word => lowerPara.includes(` ${word} `));
 
-    if (!hasArticles) {
+    // REMOVED strict requirement - now just a bonus if present
+    // Don't reject paragraphs just because they lack common words
+
+    // Has text-like structure (contains letters and spaces)
+    const hasLetters = /[a-zA-Z]/.test(trimmed);
+    const hasSpaces = trimmed.includes(' ');
+
+    if (!hasLetters || !hasSpaces) {
       return false;
     }
 
-    // Has sentence structure (starts with capital, ends with period/etc)
-    const hasSentenceStructure = /^[A-Z]/.test(trimmed) && /[.!?]$/.test(trimmed);
-    if (!hasSentenceStructure) {
-      return false;
-    }
-
+    // If we got here, it's probably readable text - accept it!
     return true;
   }
 

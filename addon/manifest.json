@@ -1,15 +1,15 @@
 {
   "manifest_version": 2,
   "name": "Zotero Summary Creator",
-  "version": "1.0.0",
-  "description": "Generate AI-powered summaries from your Zotero papers using local LLM (Ollama)",
-  "author": "Zotero Summary Creator",
-  "homepage_url": "https://github.com/yourusername/zotero-summary-creator",
+  "version": "1.0.1",
+  "description": "Generate AI-powered summaries with TTS playback from your Zotero papers using local LLM (Ollama)",
+  "author": "Zotero Summary Creator Contributors",
+  "homepage_url": "https://github.com/saul-the-engineer/zotero-summary-creator",
 
   "applications": {
     "zotero": {
       "id": "summary-creator@zotero.org",
-      "update_url": "https://github.com/yourusername/zotero-summary-creator/releases/latest/download/update.json",
+      "update_url": "https://github.com/saul-the-engineer/zotero-summary-creator/releases/latest/download/update.json",
       "strict_min_version": "6.0",
       "strict_max_version": "7.*"
     }

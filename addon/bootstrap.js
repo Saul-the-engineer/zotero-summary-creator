@@ -596,33 +596,52 @@ var ZoteroSummaryCreator = {
         Zotero.debug(`TTS: Extracted raw PDF content: ${rawContent ? rawContent.length : 0} chars`);
 
         if (!rawContent) {
-          Zotero.alert(
-            win,
-            'No Content',
-            'No content available to read. The item may have no abstract or PDF.'
-          );
-          return;
+          // Fallback to abstract if PDF extraction failed
+          Zotero.debug('TTS: PDF extraction failed, trying abstract as fallback');
+          const abstract = item.getField('abstractNote');
+          if (abstract && abstract.trim()) {
+            Zotero.debug(`TTS: Using abstract as fallback (${abstract.length} chars)`);
+            textToSpeak = this.cleanTextForTTS(abstract);
+          } else {
+            Zotero.alert(
+              win,
+              'No Content',
+              'No PDF content available to read. The PDF may not be indexed yet.\n\n' +
+              'Try:\n' +
+              '1. Right-click the PDF → "Reindex Item"\n' +
+              '2. Wait a moment for indexing to complete\n' +
+              '3. Try "Play Full Paper" again\n\n' +
+              'Or use "Play Abstract" instead.'
+            );
+            return;
+          }
+        } else {
+          // Filter content to remove figures, tables, footnotes, etc.
+          Zotero.debug(`TTS: Starting with ${rawContent.length} chars of raw PDF text`);
+          Zotero.debug(`TTS: First 500 chars: "${rawContent.substring(0, 500)}"`);
+
+          const filterService = new ContentFilterService({ aggressiveness: 'medium' });
+          const filteredText = filterService.filterForTTS(rawContent);
+
+          Zotero.debug(`TTS: After filtering: ${filteredText.length} chars`);
+
+          if (!filteredText || filteredText.trim().length < 50) {
+            const percentRemoved = ((rawContent.length - filteredText.length) / rawContent.length * 100).toFixed(0);
+            Zotero.alert(
+              win,
+              'Filtering Error',
+              `Content filtering removed too much text (${percentRemoved}% removed, ${filteredText.length} chars remaining).\n\n` +
+              'The PDF text may have formatting issues. Try:\n' +
+              '1. Use "Play Abstract" instead\n' +
+              '2. Right-click PDF → "Reindex Item"\n' +
+              '3. Check debug output for what was extracted'
+            );
+            return;
+          }
+
+          // Apply aggressive TTS cleaning
+          textToSpeak = this.cleanTextForTTS(filteredText);
         }
-
-        // Filter content to remove figures, tables, footnotes, etc.
-        Zotero.debug('TTS: Filtering content');
-        const filterService = new ContentFilterService({ aggressiveness: 'medium' });
-        const filteredText = filterService.filterForTTS(rawContent);
-
-        Zotero.debug(`TTS: Filtered to ${filteredText.length} chars`);
-
-        if (!filteredText || filteredText.trim().length < 100) {
-          Zotero.alert(
-            win,
-            'Filtering Error',
-            'Content filtering removed too much text. The PDF may have extraction issues.\n\n' +
-            'Try using "Play Summary" instead, or check the PDF quality.'
-          );
-          return;
-        }
-
-        // Apply aggressive TTS cleaning
-        textToSpeak = this.cleanTextForTTS(filteredText);
       }
 
       // Validate text content

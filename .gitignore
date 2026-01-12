@@ -1,6 +1,8 @@
 node_modules/
 dist/
+build/*.xpi
 coverage/
 *.log
 .env
 .DS_Store
+.mypy_cache/
