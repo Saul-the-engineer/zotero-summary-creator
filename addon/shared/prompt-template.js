@@ -26,12 +26,23 @@ const buildPromptFromTemplate = (content, options = {}) => {
 PAPER CONTENT:
 ${content}
 
+IMPORTANT FORMATTING RULES:
+- Clean up LaTeX artifacts: Convert $\\ell$ to "ℓ" or "l", $1$-step to "1-step", $\\alpha$ to "alpha", etc.
+- Use plain text for mathematical symbols where possible (e.g., "≤" instead of "$\\leq$")
+- Write clear prose without LaTeX delimiters ($, $$, \\, {}, etc.)
+- If a mathematical concept is complex, describe it in words
+
 REQUIRED FORMAT - You MUST use these exact headings and format:
 
 `;
 
   prompt += `**Executive Summary**
-Write ${executiveSummaryLength} summarizing the main contribution and findings.
+Write a comprehensive, self-contained technical summary (${executiveSummaryLength}) for a reader with a master's degree and 1 year of industry experience. Cover:
+1. WHAT: Define the novel contribution - the specific model variant, technique, or approach introduced (e.g., "Sparse Mixture of Experts (MoE) architecture" not just "transformer", or "Constitutional AI (CAI) training method" not just "RLHF"). Expand specialized/novel acronyms but assume familiarity with common ML terms.
+2. HOW: Explain the methodology - key implementation details, datasets, architecture choices, or experimental design
+3. WHY: State the motivation - what limitation or problem they're addressing and its significance
+4. RESULTS: Provide specific quantitative findings with numbers, benchmarks, and comparisons to baselines (e.g., "15% improvement over GPT-3 on MMLU", "reduced training cost by 40%")
+5. LIMITATIONS: Note explicitly stated constraints, failure modes, or scope limitations
 
 `;
 

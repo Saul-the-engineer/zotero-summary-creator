@@ -370,6 +370,59 @@ var ZoteroSummaryCreator = {
     return cleaned;
   },
 
+  async extractPDFContent(item) {
+    // Extract PDF content (skip abstract, go straight to PDF)
+    Zotero.debug('TTS: Looking for PDF attachment');
+
+    const attachments = item.getAttachments();
+    Zotero.debug(`TTS: Found ${attachments.length} attachments`);
+
+    for (const attachmentID of attachments) {
+      const attachment = await Zotero.Items.getAsync(attachmentID);
+
+      if (attachment.attachmentContentType === 'application/pdf') {
+        try {
+          Zotero.debug(`TTS: Found PDF attachment ${attachmentID}`);
+
+          // Get PDF text using Zotero's fulltext extraction
+          const indexedState = await Zotero.Fulltext.getIndexedState(attachmentID);
+          Zotero.debug(`TTS: PDF indexed state: ${indexedState}`);
+
+          // If not indexed, trigger indexing
+          if (indexedState !== Zotero.Fulltext.INDEX_STATE_INDEXED) {
+            Zotero.debug('TTS: PDF not indexed, triggering indexing...');
+            await Zotero.Fulltext.indexItems([attachmentID]);
+
+            // Wait briefly for indexing
+            let attempts = 0;
+            while (attempts < 10) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              const state = await Zotero.Fulltext.getIndexedState(attachmentID);
+              if (state === Zotero.Fulltext.INDEX_STATE_INDEXED) {
+                Zotero.debug('TTS: PDF indexed successfully');
+                break;
+              }
+              attempts++;
+            }
+          }
+
+          const pdfText = await Zotero.Fulltext.getItemContent(attachmentID);
+
+          if (pdfText && pdfText.content && pdfText.content.trim()) {
+            const content = pdfText.content.trim();
+            Zotero.debug(`TTS: Extracted ${content.length} chars from PDF`);
+            return content;
+          }
+        } catch (error) {
+          Zotero.debug(`TTS: Error extracting PDF: ${error}`, 2);
+        }
+      }
+    }
+
+    Zotero.debug('TTS: No PDF content found', 2);
+    return null;
+  },
+
   async playTTSFromContext(mode) {
     // mode: 'summary', 'abstract', or 'full'
     Zotero.debug(`TTS: ===== playTTSFromContext CALLED with mode: ${mode} =====`);
@@ -490,8 +543,16 @@ var ZoteroSummaryCreator = {
             const rawText = this.htmlToPlainText(content);
             Zotero.debug(`TTS: Extracted ${rawText.length} chars from HTML`);
 
+            // Skip to Executive Summary section to avoid reading title/authors
+            let contentToSpeak = rawText;
+            const execSummaryMatch = rawText.match(/Executive Summary\s*(.*)/is);
+            if (execSummaryMatch) {
+              contentToSpeak = 'Executive Summary. ' + execSummaryMatch[1];
+              Zotero.debug(`TTS: Skipped to Executive Summary, now ${contentToSpeak.length} chars`);
+            }
+
             // Apply aggressive TTS cleaning
-            textToSpeak = this.cleanTextForTTS(rawText);
+            textToSpeak = this.cleanTextForTTS(contentToSpeak);
 
             foundSummary = true;
             break;
@@ -527,12 +588,12 @@ var ZoteroSummaryCreator = {
         textToSpeak = this.cleanTextForTTS(abstract);
       } else {
         // mode === 'full'
-        Zotero.debug('TTS: Extracting full paper content');
+        Zotero.debug('TTS: Extracting full paper content from PDF');
 
-        // Get full paper content and filter it
-        const rawContent = await Zotero.SummaryCreator.extractContent(item);
+        // Get full paper content from PDF (skip abstract)
+        const rawContent = await this.extractPDFContent(item);
 
-        Zotero.debug(`TTS: Extracted raw content: ${rawContent ? rawContent.length : 0} chars`);
+        Zotero.debug(`TTS: Extracted raw PDF content: ${rawContent ? rawContent.length : 0} chars`);
 
         if (!rawContent) {
           Zotero.alert(
@@ -574,38 +635,329 @@ var ZoteroSummaryCreator = {
         throw new Error(`Text too short for TTS: ${textToSpeak.length} characters`);
       }
 
-      // Open playback dialog
-      Zotero.debug(`TTS: Opening playback dialog with ${textToSpeak.length} characters`);
-      Zotero.debug(`TTS: Dialog URL: ${this.rootURI}chrome/content/tts-dialog.xhtml`);
+      // Open control window with inline HTML
+      Zotero.debug(`TTS: Opening control window for ${textToSpeak.length} characters`);
 
-      const io = {
-        ttsService: ttsService,
-        item: item,
-        mode: mode,
-        textContent: textToSpeak
-      };
+      const controlWindow = win.open('about:blank', 'ttsControls',
+        'chrome,titlebar,centerscreen,resizable,width=500,height=450');
 
-      Zotero.debug(`TTS: IO object keys: ${Object.keys(io).join(', ')}`);
-
-      // Use chrome:// protocol for better compatibility
-      const dialogURL = this.rootURI + 'chrome/content/tts-dialog.xhtml';
-      Zotero.debug(`TTS: Full dialog URL: ${dialogURL}`);
-
-      const dialog = win.openDialog(
-        dialogURL,
-        'tts-playback',
-        'chrome,titlebar,toolbar,centerscreen,resizable,dialog=yes,alwaysRaised=yes',
-        io
-      );
-
-      Zotero.debug(`TTS: Dialog object: ${dialog ? 'created' : 'null'}`);
-
-      if (dialog) {
-        Zotero.debug(`TTS: Dialog document state: ${dialog.document ? dialog.document.readyState : 'no document'}`);
-        Zotero.debug(`TTS: Dialog location: ${dialog.location ? dialog.location.href : 'no location'}`);
+      if (!controlWindow) {
+        Zotero.alert(win, 'TTS Error', 'Failed to open control window');
+        return;
       }
 
-      Zotero.debug('TTS: Dialog opened successfully');
+      // Wait for window to load then build UI
+      controlWindow.addEventListener('load', () => {
+        Zotero.debug('TTS: Control window loaded, building UI with DOM');
+
+        const doc = controlWindow.document;
+        doc.title = `TTS: ${item.getField('title').substring(0, 50)}...`;
+
+        // Add styles
+        const style = doc.createElement('style');
+        style.textContent = `
+          body { font-family: -apple-system, system-ui, sans-serif; padding: 20px; margin: 0; background: #f5f5f5; }
+          .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+          h2 { margin-top: 0; color: #333; font-size: 18px; }
+          .info { margin-bottom: 20px; padding: 10px; background: #f9f9f9; border-radius: 4px; font-size: 14px; }
+          .controls { display: flex; gap: 10px; margin-bottom: 20px; justify-content: center; }
+          button { padding: 10px 20px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; }
+          button:hover { opacity: 0.9; }
+          button:disabled { opacity: 0.5; cursor: not-allowed; }
+          .btn-play { background: #4CAF50; color: white; }
+          .btn-pause { background: #FF9800; color: white; }
+          .btn-stop { background: #f44336; color: white; }
+          .btn-skip { background: #2196F3; color: white; padding: 10px 15px; }
+          .slider-group { margin-bottom: 15px; }
+          .slider-group label { display: block; margin-bottom: 5px; font-weight: 500; font-size: 14px; color: #666; }
+          input[type="range"] { width: 100%; }
+          .status { text-align: center; padding: 10px; background: #e3f2fd; border-radius: 4px; font-size: 14px; color: #1976d2; margin-bottom: 15px; }
+          .progress-bar { width: 100%; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; margin-bottom: 5px; }
+          .progress-fill { height: 100%; background: #4CAF50; width: 0%; transition: width 0.3s; }
+          .progress-text { text-align: center; font-size: 12px; color: #666; }
+        `;
+        doc.head.appendChild(style);
+
+        // Create container
+        const container = doc.createElement('div');
+        container.className = 'container';
+
+        // Title
+        const title = doc.createElement('h2');
+        title.textContent = 'TTS Playback';
+        container.appendChild(title);
+
+        // Info
+        const info = doc.createElement('div');
+        info.className = 'info';
+        info.innerHTML = `<strong>Mode:</strong> ${mode}<br><strong>Length:</strong> ${textToSpeak.length} characters`;
+        container.appendChild(info);
+
+        // Status
+        const status = doc.createElement('div');
+        status.className = 'status';
+        status.id = 'status';
+        status.textContent = 'Ready to play';
+        container.appendChild(status);
+
+        // Progress bar
+        const progressBar = doc.createElement('div');
+        progressBar.className = 'progress-bar';
+        const progressFill = doc.createElement('div');
+        progressFill.className = 'progress-fill';
+        progressFill.id = 'progressFill';
+        progressBar.appendChild(progressFill);
+        container.appendChild(progressBar);
+
+        const progressText = doc.createElement('div');
+        progressText.className = 'progress-text';
+        progressText.id = 'progressText';
+        progressText.textContent = '0%';
+        container.appendChild(progressText);
+
+        // Controls
+        const controls = doc.createElement('div');
+        controls.className = 'controls';
+
+        const btnRewind = doc.createElement('button');
+        btnRewind.className = 'btn-skip';
+        btnRewind.id = 'btnRewind';
+        btnRewind.textContent = '⏪';
+        btnRewind.title = 'Rewind';
+        controls.appendChild(btnRewind);
+
+        const btnPlay = doc.createElement('button');
+        btnPlay.className = 'btn-play';
+        btnPlay.id = 'btnPlay';
+        btnPlay.textContent = '▶ Play';
+        controls.appendChild(btnPlay);
+
+        const btnPause = doc.createElement('button');
+        btnPause.className = 'btn-pause';
+        btnPause.id = 'btnPause';
+        btnPause.textContent = '⏸ Pause';
+        btnPause.disabled = true;
+        controls.appendChild(btnPause);
+
+        const btnStop = doc.createElement('button');
+        btnStop.className = 'btn-stop';
+        btnStop.id = 'btnStop';
+        btnStop.textContent = '⏹ Stop';
+        btnStop.disabled = true;
+        controls.appendChild(btnStop);
+
+        const btnForward = doc.createElement('button');
+        btnForward.className = 'btn-skip';
+        btnForward.id = 'btnForward';
+        btnForward.textContent = '⏩';
+        btnForward.title = 'Forward';
+        controls.appendChild(btnForward);
+
+        container.appendChild(controls);
+
+        // Speed slider
+        const speedGroup = doc.createElement('div');
+        speedGroup.className = 'slider-group';
+        const speedLabel = doc.createElement('label');
+        speedLabel.innerHTML = 'Speed: <span id="speedValue">1.0x</span>';
+        speedGroup.appendChild(speedLabel);
+        const speedSlider = doc.createElement('input');
+        speedSlider.type = 'range';
+        speedSlider.id = 'speedSlider';
+        speedSlider.min = '0.5';
+        speedSlider.max = '2.0';
+        speedSlider.step = '0.1';
+        speedSlider.value = '1.0';
+        speedGroup.appendChild(speedSlider);
+        container.appendChild(speedGroup);
+
+        // Volume slider
+        const volumeGroup = doc.createElement('div');
+        volumeGroup.className = 'slider-group';
+        const volumeLabel = doc.createElement('label');
+        volumeLabel.innerHTML = 'Volume: <span id="volumeValue">100%</span>';
+        volumeGroup.appendChild(volumeLabel);
+        const volumeSlider = doc.createElement('input');
+        volumeSlider.type = 'range';
+        volumeSlider.id = 'volumeSlider';
+        volumeSlider.min = '0';
+        volumeSlider.max = '100';
+        volumeSlider.step = '5';
+        volumeSlider.value = '100';
+        volumeGroup.appendChild(volumeSlider);
+        container.appendChild(volumeGroup);
+
+        doc.body.appendChild(container);
+
+        Zotero.debug('TTS: DOM structure created');
+
+        const synth = win.speechSynthesis;
+        Zotero.debug(`TTS: speechSynthesis available: ${synth ? 'yes' : 'no'}`);
+
+        Zotero.debug(`TTS: Elements found - Play: ${!!btnPlay}, Pause: ${!!btnPause}, Stop: ${!!btnStop}`);
+
+        if (!btnPlay) {
+          Zotero.debug('TTS: ERROR - Play button not found!', 1);
+          return;
+        }
+
+        // Split text into chunks for better control (max 200 chars per chunk)
+        const chunkSize = 200;
+        const chunks = [];
+        for (let i = 0; i < textToSpeak.length; i += chunkSize) {
+          chunks.push(textToSpeak.substring(i, i + chunkSize));
+        }
+
+        Zotero.debug(`TTS: Split into ${chunks.length} chunks`);
+
+        let currentChunk = 0;
+        let isPlaying = false;
+        let isPaused = false;
+
+        const updateProgress = () => {
+          const progress = ((currentChunk / chunks.length) * 100).toFixed(0);
+          const fillEl = doc.getElementById('progressFill');
+          const textEl = doc.getElementById('progressText');
+          if (fillEl) fillEl.style.width = progress + '%';
+          if (textEl) textEl.textContent = progress + '%';
+        };
+
+        const updateStatus = (msg) => {
+          const statusEl = doc.getElementById('status');
+          if (statusEl) statusEl.textContent = msg;
+          Zotero.debug(`TTS: Status - ${msg}`);
+        };
+
+        const speakChunk = () => {
+          Zotero.debug(`TTS: speakChunk called - chunk ${currentChunk}/${chunks.length}`);
+
+          if (currentChunk >= chunks.length) {
+            updateStatus('Playback complete');
+            btnPlay.disabled = true;
+            btnPause.disabled = true;
+            btnStop.disabled = true;
+            isPlaying = false;
+            return;
+          }
+
+          const utterance = new win.SpeechSynthesisUtterance(chunks[currentChunk]);
+          const speedSlider = doc.getElementById('speedSlider');
+          const volumeSlider = doc.getElementById('volumeSlider');
+
+          utterance.rate = speedSlider ? parseFloat(speedSlider.value) : 1.0;
+          utterance.volume = volumeSlider ? parseInt(volumeSlider.value) / 100 : 1.0;
+
+          Zotero.debug(`TTS: Speaking chunk ${currentChunk} - rate: ${utterance.rate}, volume: ${utterance.volume}`);
+
+          utterance.onstart = () => {
+            Zotero.debug(`TTS: Utterance started for chunk ${currentChunk}`);
+          };
+
+          utterance.onend = () => {
+            Zotero.debug(`TTS: Utterance ended for chunk ${currentChunk}`);
+            if (!isPaused && isPlaying) {
+              currentChunk++;
+              updateProgress();
+              speakChunk();
+            }
+          };
+
+          utterance.onerror = (e) => {
+            Zotero.debug(`TTS: Utterance error: ${e.error}`, 1);
+            updateStatus(`Error: ${e.error}`);
+          };
+
+          synth.speak(utterance);
+          Zotero.debug(`TTS: Utterance queued`);
+        };
+
+        // Play button
+        Zotero.debug('TTS: Attaching Play button listener');
+        btnPlay.addEventListener('click', () => {
+          Zotero.debug('TTS: Play button clicked!');
+          synth.cancel();
+          isPlaying = true;
+          isPaused = false;
+          btnPlay.disabled = true;
+          btnPause.disabled = false;
+          btnStop.disabled = false;
+          updateStatus('Playing...');
+          speakChunk();
+        });
+
+        // Pause button
+        Zotero.debug('TTS: Attaching Pause button listener');
+        btnPause.addEventListener('click', () => {
+          Zotero.debug('TTS: Pause button clicked!');
+          if (synth.speaking) {
+            synth.cancel();
+            isPaused = true;
+            isPlaying = false;
+            btnPlay.disabled = false;
+            btnPause.disabled = true;
+            updateStatus('Paused');
+          }
+        });
+
+        // Stop button
+        Zotero.debug('TTS: Attaching Stop button listener');
+        btnStop.addEventListener('click', () => {
+          Zotero.debug('TTS: Stop button clicked!');
+          synth.cancel();
+          isPlaying = false;
+          isPaused = false;
+          currentChunk = 0;
+          updateProgress();
+          btnPlay.disabled = false;
+          btnPause.disabled = true;
+          btnStop.disabled = true;
+          updateStatus('Stopped');
+        });
+
+        // Rewind button
+        Zotero.debug('TTS: Attaching Rewind button listener');
+        btnRewind.addEventListener('click', () => {
+          Zotero.debug('TTS: Rewind button clicked!');
+          currentChunk = Math.max(0, currentChunk - 5);
+          updateProgress();
+          if (isPlaying) {
+            synth.cancel();
+            speakChunk();
+          }
+        });
+
+        // Forward button
+        Zotero.debug('TTS: Attaching Forward button listener');
+        btnForward.addEventListener('click', () => {
+          Zotero.debug('TTS: Forward button clicked!');
+          currentChunk = Math.min(chunks.length - 1, currentChunk + 5);
+          updateProgress();
+          if (isPlaying) {
+            synth.cancel();
+            speakChunk();
+          }
+        });
+
+        // Speed slider
+        doc.getElementById('speedSlider').addEventListener('input', (e) => {
+          doc.getElementById('speedValue').textContent = e.target.value + 'x';
+        });
+
+        // Volume slider
+        doc.getElementById('volumeSlider').addEventListener('input', (e) => {
+          doc.getElementById('volumeValue').textContent = e.target.value + '%';
+        });
+
+        updateProgress();
+
+        // Stop speech when window closes
+        controlWindow.addEventListener('unload', () => {
+          Zotero.debug('TTS: Window closing, stopping speech');
+          synth.cancel();
+          isPlaying = false;
+          isPaused = false;
+        });
+      });
 
     } catch (error) {
       Zotero.debug(`TTS: Error in playTTSFromContext: ${error}`, 1);
