@@ -60,6 +60,20 @@
         </html:label>
       </html:div>
 
+      <html:div style="margin-bottom: 15px;">
+        <html:label style="display: flex; align-items: center; cursor: pointer;">
+          <html:input
+              id="auto-manage-server"
+              type="checkbox"
+              style="margin-right: 8px;"/>
+          <html:span>Automatically start/stop Ollama server</html:span>
+        </html:label>
+        <html:div style="font-size: 11px; color: #666; margin-top: 3px; margin-left: 24px;">
+          If enabled, Ollama will be started automatically when generating summaries and stopped when complete.
+          Disable this if you prefer to manage Ollama manually.
+        </html:div>
+      </html:div>
+
       <html:hr style="margin: 20px 0;"/>
 
       <html:h3>Setup Instructions</html:h3>
@@ -77,10 +91,11 @@
           <html:li>Run: <html:code style="background: #f0f0f0; padding: 2px 5px;">ollama pull llama2</html:code></html:li>
         </html:ul>
 
-        <html:p><html:strong>3. Verify Ollama is Running:</html:strong></html:p>
+        <html:p><html:strong>3. Server Management:</html:strong></html:p>
         <html:ul>
-          <html:li>Ollama should auto-start on macOS</html:li>
-          <html:li>Test by clicking "Test Connection" below</html:li>
+          <html:li>Enable "Automatically start/stop Ollama server" to let the plugin manage Ollama for you</html:li>
+          <html:li>Or, manually run: <html:code style="background: #f0f0f0; padding: 2px 5px;">ollama serve</html:code> in Terminal</html:li>
+          <html:li>Test connection by clicking "Test Connection" below</html:li>
         </html:ul>
       </html:div>
 

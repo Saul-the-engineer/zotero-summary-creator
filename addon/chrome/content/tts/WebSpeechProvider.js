@@ -12,6 +12,7 @@ class WebSpeechProvider {
     this.isPaused = false;
     this.isPlaying = false;
     this.voices = [];
+    this.voicesLoaded = false;
     this.currentChunk = 0;
     this.chunks = [];
     this.onEndCallback = null;
@@ -21,7 +22,17 @@ class WebSpeechProvider {
       throw new Error('Web Speech API not available');
     }
 
+    // Initial voice load
     this.loadVoices();
+
+    // Setup voiceschanged event listener for async voice loading (Firefox/Zotero)
+    // This is critical for Firefox which doesn't populate voices synchronously
+    if (this.synthesis.onvoiceschanged !== undefined) {
+      this.synthesis.onvoiceschanged = () => {
+        Zotero.debug('TTS: voiceschanged event fired');
+        this.loadVoices();
+      };
+    }
 
     Zotero.debug('TTS: WebSpeechProvider initialized');
   }
@@ -31,12 +42,36 @@ class WebSpeechProvider {
    */
   loadVoices() {
     this.voices = this.synthesis.getVoices();
-    Zotero.debug(`TTS: Loaded ${this.voices.length} voices`);
+    this.voicesLoaded = this.voices.length > 0;
+    Zotero.debug(`TTS: Loaded ${this.voices.length} voices (voicesLoaded: ${this.voicesLoaded})`);
 
     // Log available voices for debugging
     this.voices.forEach((v, i) => {
       Zotero.debug(`  ${i}: ${v.name} (${v.lang}) ${v.default ? '[Default]' : ''}`);
     });
+  }
+
+  /**
+   * Wait for voices to be loaded (async polling for Firefox)
+   * @param {number} timeout - Timeout in milliseconds
+   * @returns {Promise<boolean>} - True if voices loaded, false if timeout
+   */
+  async waitForVoices(timeout = 5000) {
+    Zotero.debug(`TTS: Waiting for voices (timeout: ${timeout}ms)...`);
+    const start = Date.now();
+
+    while (!this.voicesLoaded && (Date.now() - start) < timeout) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      this.loadVoices();
+    }
+
+    if (this.voicesLoaded) {
+      Zotero.debug(`TTS: Voices loaded after ${Date.now() - start}ms`);
+    } else {
+      Zotero.debug(`TTS: Voice loading timed out after ${timeout}ms`, 2);
+    }
+
+    return this.voicesLoaded;
   }
 
   /**
@@ -285,7 +320,7 @@ class WebSpeechProvider {
    * @returns {boolean}
    */
   isSupported() {
-    return !!this.synthesis && this.voices.length > 0;
+    return !!this.synthesis && this.voicesLoaded;
   }
 
   /**

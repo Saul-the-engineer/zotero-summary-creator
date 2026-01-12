@@ -5,6 +5,7 @@ Zotero.SummaryCreator = {
   initialized: false,
   ollamaClient: null,
   summaryParser: null,
+  ollamaServerManager: null,
 
   async init() {
     if (this.initialized) return;
@@ -21,6 +22,7 @@ Zotero.SummaryCreator = {
     // For now, we'll create inline versions adapted for Zotero
     this.ollamaClient = new OllamaClientAdapter();
     this.summaryParser = new SummaryParserAdapter();
+    this.ollamaServerManager = new OllamaServerManager();
   },
 
   async generateSummary(item, options = {}) {
@@ -35,6 +37,7 @@ Zotero.SummaryCreator = {
     const ollamaUrl = prefs.getCharPref('ollamaUrl');
     const ollamaModel = prefs.getCharPref('ollamaModel');
     const autoOpen = prefs.getBoolPref('autoOpen');
+    const autoManageServer = prefs.getBoolPref('autoManageServer');
 
     // Check if this is batch mode (default: false for single item)
     const isBatchMode = options.batchMode || false;
@@ -69,25 +72,49 @@ Zotero.SummaryCreator = {
 
     Zotero.debug(`Summary Creator: Extracted ${content.length} characters of content`);
 
-    // Generate summary using Ollama
-    Zotero.debug(`Summary Creator: Calling Ollama at ${ollamaUrl} with model ${ollamaModel}`);
-
-    let rawSummary;
-    try {
-      rawSummary = await this.ollamaClient.createSummary(
-        content,
-        ollamaUrl,
-        ollamaModel
-      );
-      Zotero.debug(`Summary Creator: Received response from Ollama (${rawSummary.length} chars)`);
-    } catch (error) {
-      Zotero.debug(`Summary Creator: Ollama error: ${error.message}`, 1);
-      throw createOllamaError(error.message);
+    // Start Ollama server if auto-manage is enabled
+    if (autoManageServer) {
+      try {
+        await this.ollamaServerManager.startServer(ollamaUrl);
+      } catch (error) {
+        Zotero.debug(`Summary Creator: Failed to start Ollama server: ${error.message}`, 1);
+        throw new Error(`Failed to start Ollama server: ${error.message}`);
+      }
     }
 
-    // Parse summary
-    Zotero.debug(`Summary Creator: Parsing summary`);
-    const parsedSummary = this.summaryParser.parse(rawSummary);
+    let rawSummary;
+    let parsedSummary;
+
+    try {
+      // Generate summary using Ollama
+      Zotero.debug(`Summary Creator: Calling Ollama at ${ollamaUrl} with model ${ollamaModel}`);
+
+      try {
+        rawSummary = await this.ollamaClient.createSummary(
+          content,
+          ollamaUrl,
+          ollamaModel
+        );
+        Zotero.debug(`Summary Creator: Received response from Ollama (${rawSummary.length} chars)`);
+      } catch (error) {
+        Zotero.debug(`Summary Creator: Ollama error: ${error.message}`, 1);
+        throw createOllamaError(error.message);
+      }
+
+      // Parse summary
+      Zotero.debug(`Summary Creator: Parsing summary`);
+      parsedSummary = this.summaryParser.parse(rawSummary);
+    } finally {
+      // Stop the Ollama server if auto-manage is enabled
+      if (autoManageServer) {
+        try {
+          await this.ollamaServerManager.stopServer(ollamaUrl);
+        } catch (stopError) {
+          Zotero.debug(`Summary Creator: Failed to stop Ollama server: ${stopError.message}`, 2);
+          // Don't throw - we don't want to mask the original error
+        }
+      }
+    }
 
     // Validate parsed summary
     if (!parsedSummary.executiveSummary || parsedSummary.executiveSummary.trim() === '') {
@@ -159,13 +186,15 @@ Zotero.SummaryCreator = {
 
       if (attachment.attachmentContentType === 'application/pdf') {
         try {
-          // Warn about linked files (common issue)
-          if (linkMode === 1) {
-            Zotero.debug(`Summary Creator: WARNING - This is a LINKED file, not stored in Zotero. Linked files may not be indexed.`, 2);
-            Zotero.debug(`Summary Creator: If extraction fails, enable "Index linked files" in Preferences → Search, or convert to stored file.`, 2);
+          // Verify this is actually an attachment item
+          Zotero.debug(`Summary Creator: Verifying attachment ${attachmentID} is valid`);
+          if (!attachment || typeof attachment !== 'object') {
+            Zotero.debug(`Summary Creator: ERROR - attachment is not an object: ${typeof attachment}`, 2);
+            continue;
           }
 
           // Check if this is a valid, accessible PDF file
+          Zotero.debug(`Summary Creator: Getting file path for attachment ${attachmentID}`);
           const attachmentPath = attachment.getFilePath();
           if (!attachmentPath) {
             Zotero.debug(`Summary Creator: Attachment ${attachmentID} has no file path (might be linked URL or not downloaded)`, 2);
@@ -175,6 +204,7 @@ Zotero.SummaryCreator = {
           Zotero.debug(`Summary Creator: PDF path: ${attachmentPath}`);
 
           // Check if file actually exists on disk
+          Zotero.debug(`Summary Creator: Checking if file exists on disk`);
           const file = Zotero.File.pathToFile(attachmentPath);
           if (!file || !file.exists()) {
             Zotero.debug(`Summary Creator: PDF file doesn't exist on disk yet (might still be downloading)`, 2);
@@ -184,9 +214,61 @@ Zotero.SummaryCreator = {
           const fileSize = file.fileSize;
           Zotero.debug(`Summary Creator: PDF file exists, size: ${fileSize} bytes`);
 
+          // Special handling for linked files (linkMode === 1)
+          // Zotero has bugs in getIndexedState() and indexItems() for linked files
+          if (linkMode === 1) {
+            Zotero.debug(`Summary Creator: WARNING - This is a LINKED file, not stored in Zotero.`, 2);
+            Zotero.debug(`Summary Creator: Zotero has bugs with linked file indexing - using direct extraction.`, 2);
+
+            // For linked files, skip the indexing check and try direct extraction
+            // This works around Zotero's "item.isAttachment is not a function" bug
+            Zotero.debug(`Summary Creator: Attempting direct PDF text extraction for linked file`);
+
+            try {
+              // Try to extract directly without indexing
+              const pdfText = await Zotero.Fulltext.getItemContent(attachmentID);
+
+              if (pdfText && pdfText.content && pdfText.content.trim()) {
+                const content = pdfText.content.trim();
+                Zotero.debug(`Summary Creator: Extracted ${content.length} chars from linked PDF`);
+
+                if (content.length < 100) {
+                  Zotero.debug(`Summary Creator: PDF text too short (${content.length} chars), might be scanned/image PDF`, 2);
+                  continue;
+                }
+
+                return content.substring(0, 10000);
+              } else {
+                Zotero.debug(`Summary Creator: Linked file has no indexed content.`, 2);
+                Zotero.debug(`Summary Creator: This is expected - Zotero doesn't index linked files by default.`, 2);
+                Zotero.debug(`Summary Creator: Fix: Enable "Index linked files" in Preferences → Search, then Reindex Items.`, 2);
+                continue;
+              }
+            } catch (directError) {
+              Zotero.debug(`Summary Creator: Direct extraction failed: ${directError.message}`, 2);
+              continue;
+            }
+          }
+
           // Check if PDF is indexed
-          let indexedState = await Zotero.Fulltext.getIndexedState(attachmentID);
-          Zotero.debug(`Summary Creator: PDF indexed state: ${indexedState} (0=unindexed, 1=indexed, 2=partial)`);
+          Zotero.debug(`Summary Creator: Calling Zotero.Fulltext.getIndexedState(${attachmentID})`);
+          let indexedState;
+          try {
+            indexedState = await Zotero.Fulltext.getIndexedState(attachmentID);
+            Zotero.debug(`Summary Creator: PDF indexed state: ${indexedState} (0=unindexed, 1=indexed, 2=partial)`);
+          } catch (indexError) {
+            Zotero.debug(`Summary Creator: ERROR getting indexed state: ${indexError.message}`, 2);
+            Zotero.debug(`Summary Creator: Index error stack: ${indexError.stack}`, 2);
+
+            // WORKAROUND: Zotero has a bug in getIndexedState() for linked files
+            // If we get "item.isAttachment is not a function", assume it's unindexed
+            if (indexError.message && indexError.message.includes('isAttachment')) {
+              Zotero.debug(`Summary Creator: Detected Zotero bug with linked files - assuming unindexed`, 2);
+              indexedState = 0; // Assume unindexed
+            } else {
+              throw indexError;
+            }
+          }
 
           // If not fully indexed, trigger indexing and wait
           if (indexedState !== Zotero.Fulltext.INDEX_STATE_INDEXED) {
@@ -195,11 +277,23 @@ Zotero.SummaryCreator = {
             // Clear any existing partial index
             if (indexedState === 2) { // PARTIAL
               Zotero.debug('Summary Creator: Clearing partial index first');
-              await Zotero.Fulltext.clearItemContent(attachmentID);
+              try {
+                await Zotero.Fulltext.clearItemContent(attachmentID);
+              } catch (clearError) {
+                Zotero.debug(`Summary Creator: ERROR clearing content: ${clearError.message}`, 2);
+                throw clearError;
+              }
             }
 
             // Trigger indexing
-            await Zotero.Fulltext.indexItems([attachmentID], { forceReindex: true });
+            Zotero.debug(`Summary Creator: Calling Zotero.Fulltext.indexItems([${attachmentID}])`);
+            try {
+              await Zotero.Fulltext.indexItems([attachmentID], { forceReindex: true });
+            } catch (indexingError) {
+              Zotero.debug(`Summary Creator: ERROR indexing items: ${indexingError.message}`, 2);
+              Zotero.debug(`Summary Creator: Indexing error stack: ${indexingError.stack}`, 2);
+              throw indexingError;
+            }
 
             // Wait with exponential backoff for up to 30 seconds
             let totalWait = 0;
@@ -229,7 +323,15 @@ Zotero.SummaryCreator = {
           }
 
           // Get PDF text using Zotero's built-in PDF extraction
-          const pdfText = await Zotero.Fulltext.getItemContent(attachmentID);
+          Zotero.debug(`Summary Creator: Calling Zotero.Fulltext.getItemContent(${attachmentID})`);
+          let pdfText;
+          try {
+            pdfText = await Zotero.Fulltext.getItemContent(attachmentID);
+          } catch (contentError) {
+            Zotero.debug(`Summary Creator: ERROR getting item content: ${contentError.message}`, 2);
+            Zotero.debug(`Summary Creator: Content error stack: ${contentError.stack}`, 2);
+            throw contentError;
+          }
 
           if (pdfText && pdfText.content && pdfText.content.trim()) {
             const content = pdfText.content.trim();
@@ -318,6 +420,212 @@ Zotero.SummaryCreator = {
     return div.innerHTML;
   }
 };
+
+// Ollama Server Manager
+// Manages the lifecycle of the Ollama server process
+class OllamaServerManager {
+  constructor() {
+    this.serverProcess = null;
+    this.isServerRunning = false;
+    this.wasStartedByUs = false;
+  }
+
+  async startServer(ollamaUrl) {
+    if (this.isServerRunning) {
+      Zotero.debug('Ollama Server Manager: Server already running');
+      return;
+    }
+
+    Zotero.debug('Ollama Server Manager: Starting Ollama server...');
+
+    try {
+      // First check if server is already running (externally)
+      Zotero.debug('Ollama Server Manager: Checking if server is already running...');
+      const isAlreadyRunning = await this.checkServerHealth(ollamaUrl, 2, 1000);
+      if (isAlreadyRunning) {
+        Zotero.debug('Ollama Server Manager: ✓ Server already running externally - will use it');
+        this.isServerRunning = true;
+        this.wasStartedByUs = false; // Don't kill external servers
+        return;
+      }
+
+      Zotero.debug('Ollama Server Manager: No running server detected, will start one');
+
+      // Start Ollama server using nsIProcess
+      const file = Components.classes["@mozilla.org/file/local;1"]
+        .createInstance(Components.interfaces.nsIFile);
+
+      // On macOS, ollama is typically in /usr/local/bin or /opt/homebrew/bin
+      // Try to find it
+      const possiblePaths = [
+        '/usr/local/bin/ollama',
+        '/opt/homebrew/bin/ollama',
+        '/usr/bin/ollama'
+      ];
+
+      let ollamaPath = null;
+      for (const path of possiblePaths) {
+        try {
+          file.initWithPath(path);
+          if (file.exists()) {
+            ollamaPath = path;
+            Zotero.debug(`Ollama Server Manager: Found ollama at ${path}`);
+            break;
+          }
+        } catch (e) {
+          // Path doesn't exist, try next one
+        }
+      }
+
+      if (!ollamaPath) {
+        throw new Error('Ollama executable not found. Please ensure Ollama is installed and in your PATH.');
+      }
+
+      // Use /bin/sh to launch ollama with proper environment
+      // This ensures HOME, PATH, and other env vars are set correctly
+      const shellFile = Components.classes["@mozilla.org/file/local;1"]
+        .createInstance(Components.interfaces.nsIFile);
+      shellFile.initWithPath('/bin/sh');
+
+      const process = Components.classes["@mozilla.org/process/util;1"]
+        .createInstance(Components.interfaces.nsIProcess);
+      process.init(shellFile);
+
+      // Use shell to run ollama with proper environment and detach it
+      const shellCmd = `nohup ${ollamaPath} serve > /tmp/ollama-zotero.log 2>&1 &`;
+      const args = ['-c', shellCmd];
+
+      Zotero.debug(`Ollama Server Manager: Executing via shell: ${shellCmd}`);
+      Zotero.debug(`Ollama Server Manager: Current environment HOME: ${Services.env.get('HOME')}`);
+      Zotero.debug(`Ollama Server Manager: Current environment PATH: ${Services.env.get('PATH')}`);
+
+      // Run the shell command
+      try {
+        process.runAsync(args, args.length, {
+          observe: (subject, topic, data) => {
+            if (topic === 'process-finished') {
+              Zotero.debug('Ollama Server Manager: Shell process finished (this is expected - ollama is backgrounded)');
+            } else if (topic === 'process-failed') {
+              Zotero.debug(`Ollama Server Manager: Shell process failed with code ${data}`, 2);
+              this.isServerRunning = false;
+            }
+          }
+        });
+        Zotero.debug('Ollama Server Manager: Shell command executed');
+      } catch (runError) {
+        throw new Error(`Failed to execute ollama: ${runError.message}`);
+      }
+
+      // Store null for process since we're using nohup - we'll track it differently
+      this.serverProcess = process;
+      this.wasStartedByUs = true;
+
+      Zotero.debug('Ollama Server Manager: Waiting for server to become responsive...');
+      Zotero.debug(`Ollama Server Manager: Will check ${ollamaUrl}/api/tags for up to 60 seconds`);
+
+      // Wait for server to be ready (up to 60 seconds for initial model loading)
+      // Start checking immediately - Ollama may already be warming up
+      const isReady = await this.checkServerHealth(ollamaUrl, 120, 500);
+
+      if (!isReady) {
+        throw new Error(
+          `Ollama server failed to respond within 60 seconds.\n\n` +
+          `Troubleshooting:\n` +
+          `1. Check the log: cat /tmp/ollama-zotero.log\n` +
+          `2. Try running "ollama serve" manually in Terminal\n` +
+          `3. Check if port 11434 is already in use: lsof -i :11434\n` +
+          `4. Verify model is downloaded: ollama list\n` +
+          `5. Disable "Auto-manage server" in preferences and run Ollama manually`
+        );
+      }
+
+      this.isServerRunning = true;
+      Zotero.debug('Ollama Server Manager: Server is ready');
+
+    } catch (error) {
+      Zotero.debug(`Ollama Server Manager: Failed to start server: ${error.message}`, 2);
+      throw error;
+    }
+  }
+
+  async checkServerHealth(ollamaUrl, maxAttempts = 120, delayMs = 500) {
+    Zotero.debug(`Ollama Server Manager: Checking server health at ${ollamaUrl}`);
+
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        // Simple fetch without timeout - Zotero's Firefox doesn't support AbortController
+        const response = await fetch(`${ollamaUrl}/api/tags`, {
+          method: 'GET'
+        });
+
+        if (response.ok) {
+          Zotero.debug(`Ollama Server Manager: Server is healthy (attempt ${i + 1})`);
+          return true;
+        } else {
+          Zotero.debug(`Ollama Server Manager: Server responded with status ${response.status} (attempt ${i + 1})`);
+        }
+      } catch (error) {
+        // Server not ready yet, continue waiting
+        if (i % 10 === 0) {
+          Zotero.debug(`Ollama Server Manager: Waiting for server... (attempt ${i + 1}/${maxAttempts}) - ${error.name}: ${error.message}`);
+        }
+      }
+
+      // Only wait if we're going to try again
+      if (i < maxAttempts - 1) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    Zotero.debug('Ollama Server Manager: Health check timed out');
+    return false;
+  }
+
+  async stopServer(ollamaUrl) {
+    if (!this.isServerRunning) {
+      Zotero.debug('Ollama Server Manager: No server to stop');
+      return;
+    }
+
+    // Only kill the server if we started it
+    if (!this.wasStartedByUs) {
+      Zotero.debug('Ollama Server Manager: Server was running externally, not stopping it');
+      this.isServerRunning = false;
+      return;
+    }
+
+    Zotero.debug('Ollama Server Manager: Stopping Ollama server that we started...');
+
+    try {
+      // Use pkill to find and kill ollama serve process
+      const killFile = Components.classes["@mozilla.org/file/local;1"]
+        .createInstance(Components.interfaces.nsIFile);
+      killFile.initWithPath('/usr/bin/pkill');
+
+      const killProcess = Components.classes["@mozilla.org/process/util;1"]
+        .createInstance(Components.interfaces.nsIProcess);
+      killProcess.init(killFile);
+
+      // Kill ollama processes
+      const args = ['-f', 'ollama serve'];
+
+      Zotero.debug('Ollama Server Manager: Executing pkill -f "ollama serve"');
+
+      killProcess.run(true, args, args.length);
+      Zotero.debug('Ollama Server Manager: pkill completed');
+
+      this.isServerRunning = false;
+      this.serverProcess = null;
+      this.wasStartedByUs = false;
+
+    } catch (error) {
+      Zotero.debug(`Ollama Server Manager: Error stopping server: ${error.message}`, 2);
+      // Don't throw - we want to continue even if shutdown fails
+      this.isServerRunning = false;
+      this.wasStartedByUs = false;
+    }
+  }
+}
 
 // Ollama Client Adapter
 class OllamaClientAdapter {

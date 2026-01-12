@@ -13,6 +13,9 @@ var SummaryCreatorPreferences = {
 
     document.getElementById('auto-open').checked =
       prefs.getBoolPref('autoOpen', true);
+
+    document.getElementById('auto-manage-server').checked =
+      prefs.getBoolPref('autoManageServer', true);
   },
 
   save() {
@@ -31,6 +34,11 @@ var SummaryCreatorPreferences = {
     prefs.setBoolPref(
       'autoOpen',
       document.getElementById('auto-open').checked
+    );
+
+    prefs.setBoolPref(
+      'autoManageServer',
+      document.getElementById('auto-manage-server').checked
     );
 
     return true;

@@ -11,10 +11,19 @@
     xmlns:html="http://www.w3.org/1999/xhtml"
     width="600"
     height="400"
+    persist="screenX screenY width height"
     style="padding: 0;">
 
   <script src="chrome://zotero/content/include.js"/>
-  <script src="tts-dialog.js"/>
+  <script type="application/javascript">
+    // Immediate debug on window load
+    if (typeof Zotero !== 'undefined') {
+      Zotero.debug('TTS Dialog XHTML: Window script executed - Zotero available');
+    } else {
+      console.log('TTS Dialog XHTML: Window script executed but Zotero not available');
+    }
+  </script>
+  <script type="application/javascript" src="tts-dialog.js"/>
 
   <html:div style="padding: 20px; font-family: -apple-system, system-ui, sans-serif;">
     <!-- Header -->

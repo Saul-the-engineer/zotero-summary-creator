@@ -82,16 +82,42 @@ var ZoteroSummaryCreator = {
       const playMenuSummary = Zotero.getMainWindow().document.createXULElement('menuitem');
       playMenuSummary.id = 'zotero-summarycreator-play-summary';
       playMenuSummary.setAttribute('label', '\ud83d\udd0a Play Summary (TTS)');
-      playMenuSummary.addEventListener('command', () => {
-        this.playTTSFromContext('summary');
+      playMenuSummary.addEventListener('command', async () => {
+        try {
+          Zotero.debug('TTS: Play Summary menu clicked');
+          await this.playTTSFromContext('summary');
+        } catch (e) {
+          Zotero.debug(`TTS: Error in Play Summary handler: ${e}`, 1);
+          Zotero.debug(`TTS: Stack: ${e.stack}`, 1);
+        }
       });
       itemPopup.appendChild(playMenuSummary);
+
+      const playMenuAbstract = Zotero.getMainWindow().document.createXULElement('menuitem');
+      playMenuAbstract.id = 'zotero-summarycreator-play-abstract';
+      playMenuAbstract.setAttribute('label', '\ud83d\udd0a Play Abstract (TTS)');
+      playMenuAbstract.addEventListener('command', async () => {
+        try {
+          Zotero.debug('TTS: Play Abstract menu clicked');
+          await this.playTTSFromContext('abstract');
+        } catch (e) {
+          Zotero.debug(`TTS: Error in Play Abstract handler: ${e}`, 1);
+          Zotero.debug(`TTS: Stack: ${e.stack}`, 1);
+        }
+      });
+      itemPopup.appendChild(playMenuAbstract);
 
       const playMenuFull = Zotero.getMainWindow().document.createXULElement('menuitem');
       playMenuFull.id = 'zotero-summarycreator-play-full';
       playMenuFull.setAttribute('label', '\ud83d\udd0a Play Full Paper (TTS)');
-      playMenuFull.addEventListener('command', () => {
-        this.playTTSFromContext('full');
+      playMenuFull.addEventListener('command', async () => {
+        try {
+          Zotero.debug('TTS: Play Full Paper menu clicked');
+          await this.playTTSFromContext('full');
+        } catch (e) {
+          Zotero.debug(`TTS: Error in Play Full Paper handler: ${e}`, 1);
+          Zotero.debug(`TTS: Stack: ${e.stack}`, 1);
+        }
       });
       itemPopup.appendChild(playMenuFull);
     }
@@ -110,6 +136,9 @@ var ZoteroSummaryCreator = {
     const playSummaryMenu = doc.getElementById('zotero-summarycreator-play-summary');
     if (playSummaryMenu) playSummaryMenu.remove();
 
+    const playAbstractMenu = doc.getElementById('zotero-summarycreator-play-abstract');
+    if (playAbstractMenu) playAbstractMenu.remove();
+
     const playFullMenu = doc.getElementById('zotero-summarycreator-play-full');
     if (playFullMenu) playFullMenu.remove();
   },
@@ -126,6 +155,9 @@ var ZoteroSummaryCreator = {
     }
     if (!prefBranch.prefHasUserValue('autoOpen')) {
       prefBranch.setBoolPref('autoOpen', true);
+    }
+    if (!prefBranch.prefHasUserValue('autoManageServer')) {
+      prefBranch.setBoolPref('autoManageServer', true);
     }
 
     // TTS preferences
@@ -236,83 +268,231 @@ var ZoteroSummaryCreator = {
     }
   },
 
-  async playTTSFromContext(mode) {
-    // mode: 'summary' or 'full'
-    Zotero.debug(`TTS: playTTSFromContext called with mode: ${mode}`);
-
-    // Check if TTS is enabled in preferences
-    const prefs = Services.prefs.getBranch('extensions.summarycreator.tts.');
-    if (!prefs.getBoolPref('enabled', true)) {
-      Zotero.alert(
-        Zotero.getMainWindow(),
-        'TTS Disabled',
-        'Text-to-Speech is disabled in preferences. Enable it in Tools → Summary Creator Preferences.'
-      );
-      return;
+  // Helper function to extract clean text from HTML
+  htmlToPlainText(html) {
+    if (!html || typeof html !== 'string') {
+      Zotero.debug('TTS: htmlToPlainText received invalid input', 2);
+      return '';
     }
 
-    // Check if Web Speech API is available
     const win = Zotero.getMainWindow();
-    if (!win.speechSynthesis) {
-      Zotero.alert(
-        win,
-        'TTS Not Supported',
-        'Text-to-Speech is not supported in this browser environment.'
-      );
-      return;
-    }
-
-    // Check if voices are available
-    const voices = win.speechSynthesis.getVoices();
-    if (voices.length === 0) {
-      Zotero.alert(
-        win,
-        'No Voices Available',
-        'No TTS voices available. Please install system voices:\n\n' +
-        '• macOS: System Preferences → Accessibility → Spoken Content\n' +
-        '• Windows: Settings → Time & Language → Speech'
-      );
-      return;
-    }
-
-    // Get selected items
-    const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
-    if (!selectedItems || selectedItems.length === 0) {
-      Zotero.alert(
-        win,
-        'No Selection',
-        'Please select one or more items to play with TTS.'
-      );
-      return;
-    }
-
-    // For now, just play the first selected item
-    // TODO: Implement queue for multiple items
-    const item = selectedItems[0];
+    let text = '';
 
     try {
-      // Initialize TTS service
+      // Try using DOMParser for safer HTML parsing
+      const parser = new win.DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+
+      if (doc.body) {
+        text = doc.body.textContent || doc.body.innerText || '';
+      } else {
+        // Fallback: try plain div approach
+        const div = win.document.createElement('div');
+        div.innerHTML = html;
+        text = div.textContent || div.innerText || '';
+      }
+    } catch (e) {
+      Zotero.debug(`TTS: Error parsing HTML: ${e}`, 1);
+
+      // Last resort: strip HTML tags with regex (not perfect but safe)
+      text = html.replace(/<[^>]*>/g, ' ');
+    }
+
+    // Aggressive cleaning for TTS compatibility
+    text = text.replace(/[\u0000-\u001F\u007F-\u009F]/g, ''); // Remove control characters
+    text = text.replace(/[\u200B-\u200D\uFEFF]/g, ''); // Remove zero-width characters
+    text = text.replace(/[\u2018\u2019]/g, "'"); // Replace smart quotes with regular quotes
+    text = text.replace(/[\u201C\u201D]/g, '"'); // Replace smart double quotes
+    text = text.replace(/[\u2013\u2014]/g, '-'); // Replace en/em dashes
+    text = text.replace(/\u2026/g, '...'); // Replace ellipsis
+    text = text.replace(/&nbsp;/g, ' '); // Replace HTML entities
+    text = text.replace(/&amp;/g, '&');
+    text = text.replace(/&lt;/g, '<');
+    text = text.replace(/&gt;/g, '>');
+    text = text.replace(/&quot;/g, '"');
+    text = text.replace(/&#39;/g, "'");
+    text = text.replace(/[^\x20-\x7E\n\r\t]/g, ''); // Keep only printable ASCII + newlines/tabs
+    text = text.replace(/\s+/g, ' ').trim(); // Normalize whitespace
+
+    return text;
+  },
+
+  // Clean text for TTS - even more aggressive
+  cleanTextForTTS(text) {
+    if (!text || typeof text !== 'string') {
+      Zotero.debug('TTS: cleanTextForTTS received invalid input', 2);
+      return '';
+    }
+
+    Zotero.debug(`TTS: Cleaning ${text.length} chars for TTS`);
+
+    // Start with basic cleaning
+    let cleaned = text;
+
+    // Remove control characters and special unicode
+    cleaned = cleaned.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+    cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, '');
+    cleaned = cleaned.replace(/[\uFFF0-\uFFFF]/g, '');
+
+    // Replace unicode punctuation with ASCII equivalents
+    cleaned = cleaned.replace(/[\u2018\u2019\u201A\u201B]/g, "'");
+    cleaned = cleaned.replace(/[\u201C\u201D\u201E\u201F]/g, '"');
+    cleaned = cleaned.replace(/[\u2013\u2014]/g, '-');
+    cleaned = cleaned.replace(/\u2026/g, '...');
+    cleaned = cleaned.replace(/[\u2022\u2023\u2043]/g, '*');
+
+    // Remove emojis and symbols (they can cause issues)
+    cleaned = cleaned.replace(/[\u{1F600}-\u{1F64F}]/gu, ''); // Emoticons
+    cleaned = cleaned.replace(/[\u{1F300}-\u{1F5FF}]/gu, ''); // Misc Symbols
+    cleaned = cleaned.replace(/[\u{1F680}-\u{1F6FF}]/gu, ''); // Transport
+    cleaned = cleaned.replace(/[\u{1F1E0}-\u{1F1FF}]/gu, ''); // Flags
+    cleaned = cleaned.replace(/[\u{2600}-\u{26FF}]/gu, '');   // Misc symbols
+    cleaned = cleaned.replace(/[\u{2700}-\u{27BF}]/gu, '');   // Dingbats
+
+    // Keep only safe printable characters
+    cleaned = cleaned.replace(/[^\x20-\x7E\n\r\t]/g, '');
+
+    // Normalize whitespace
+    cleaned = cleaned.replace(/\t/g, ' ');
+    cleaned = cleaned.replace(/\r\n/g, '\n');
+    cleaned = cleaned.replace(/\r/g, '\n');
+    cleaned = cleaned.replace(/ +/g, ' ');
+    cleaned = cleaned.replace(/\n+/g, '\n');
+    cleaned = cleaned.trim();
+
+    Zotero.debug(`TTS: Cleaned to ${cleaned.length} chars`);
+
+    // Log first 200 chars for debugging
+    if (cleaned.length > 0) {
+      Zotero.debug(`TTS: First 200 chars: "${cleaned.substring(0, 200)}"`);
+    }
+
+    return cleaned;
+  },
+
+  async playTTSFromContext(mode) {
+    // mode: 'summary', 'abstract', or 'full'
+    Zotero.debug(`TTS: ===== playTTSFromContext CALLED with mode: ${mode} =====`);
+
+    const win = Zotero.getMainWindow();
+
+    try {
+      Zotero.debug(`TTS: Inside try block, checking prerequisites...`);
+      // Check if TTS is enabled in preferences
+      const prefs = Services.prefs.getBranch('extensions.summarycreator.tts.');
+      if (!prefs.getBoolPref('enabled', true)) {
+        Zotero.alert(
+          win,
+          'TTS Disabled',
+          'Text-to-Speech is disabled in preferences. Enable it in Tools → Summary Creator Preferences.'
+        );
+        return;
+      }
+
+      // Check if Web Speech API is available
+      if (!win.speechSynthesis) {
+        Zotero.alert(
+          win,
+          'TTS Not Supported',
+          'Text-to-Speech is not supported in this browser environment.'
+        );
+        return;
+      }
+
+      // Get selected items
+      const selectedItems = Zotero.getActiveZoteroPane().getSelectedItems();
+      if (!selectedItems || selectedItems.length === 0) {
+        Zotero.alert(
+          win,
+          'No Selection',
+          'Please select one or more items to play with TTS.'
+        );
+        return;
+      }
+
+      // For now, just play the first selected item
+      let item = selectedItems[0];
+
+      // Check if the selected item is an attachment instead of a regular item
+      if (!item.isRegularItem()) {
+        Zotero.debug(`TTS: Selected item ${item.id} is not a regular item (it's an attachment or note)`, 2);
+
+        // Try to get the parent item
+        if (item.parentID) {
+          const parentItem = await Zotero.Items.getAsync(item.parentID);
+          if (parentItem && parentItem.isRegularItem()) {
+            Zotero.debug(`TTS: Using parent item ${parentItem.id} instead`);
+            item = parentItem;
+          } else {
+            Zotero.alert(
+              win,
+              'Invalid Selection',
+              'Please select a regular item (not an attachment or note).'
+            );
+            return;
+          }
+        } else {
+          Zotero.alert(
+            win,
+            'Invalid Selection',
+            'Please select a regular item (not an attachment or note).'
+          );
+          return;
+        }
+      }
+
+      Zotero.debug(`TTS: Processing item ${item.id} (${item.getField('title').substring(0, 50)})`);
+
+      // Initialize TTS service and wait for voices to load
       const webSpeechProvider = new WebSpeechProvider();
+
+      // Wait for voices to be available (async loading in Firefox)
+      const voicesLoaded = await webSpeechProvider.waitForVoices(5000);
+
+      if (!voicesLoaded) {
+        Zotero.alert(
+          win,
+          'No Voices Available',
+          'No TTS voices available. Please install system voices:\n\n' +
+          '• macOS: System Preferences → Accessibility → Spoken Content\n' +
+          '• Windows: Settings → Time & Language → Speech\n\n' +
+          'After installing voices, restart Zotero.'
+        );
+        return;
+      }
+
       const ttsService = new TTSService({ webSpeech: webSpeechProvider });
       await ttsService.initialize();
+      Zotero.debug('TTS: Service initialized');
 
       // Get content to play
       let textToSpeak = '';
 
       if (mode === 'summary') {
+        Zotero.debug('TTS: Extracting summary from notes');
+
         // Get generated summary from notes
         const notes = item.getNotes();
+        Zotero.debug(`TTS: Found ${notes.length} notes`);
+
         let foundSummary = false;
 
         for (const noteID of notes) {
           const note = await Zotero.Items.getAsync(noteID);
           const content = note.getNote();
 
+          Zotero.debug(`TTS: Checking note ${noteID}, length: ${content.length}`);
+
           if (content.includes('GENERATED SUMMARY')) {
+            Zotero.debug('TTS: Found summary note');
+
             // Extract plain text from HTML
-            const div = win.document.createElement('div');
-            div.innerHTML = content;
-            textToSpeak = div.textContent || div.innerText || '';
+            const rawText = this.htmlToPlainText(content);
+            Zotero.debug(`TTS: Extracted ${rawText.length} chars from HTML`);
+
+            // Apply aggressive TTS cleaning
+            textToSpeak = this.cleanTextForTTS(rawText);
+
             foundSummary = true;
             break;
           }
@@ -326,10 +506,34 @@ var ZoteroSummaryCreator = {
           );
           return;
         }
+      } else if (mode === 'abstract') {
+        Zotero.debug('TTS: Extracting abstract');
+
+        // Get abstract from item
+        const abstract = item.getField('abstractNote');
+
+        if (!abstract || abstract.trim() === '') {
+          Zotero.alert(
+            win,
+            'No Abstract',
+            'This item has no abstract available.'
+          );
+          return;
+        }
+
+        Zotero.debug(`TTS: Found abstract (${abstract.length} chars)`);
+
+        // Apply aggressive TTS cleaning
+        textToSpeak = this.cleanTextForTTS(abstract);
       } else {
         // mode === 'full'
+        Zotero.debug('TTS: Extracting full paper content');
+
         // Get full paper content and filter it
         const rawContent = await Zotero.SummaryCreator.extractContent(item);
+
+        Zotero.debug(`TTS: Extracted raw content: ${rawContent ? rawContent.length : 0} chars`);
+
         if (!rawContent) {
           Zotero.alert(
             win,
@@ -340,10 +544,13 @@ var ZoteroSummaryCreator = {
         }
 
         // Filter content to remove figures, tables, footnotes, etc.
+        Zotero.debug('TTS: Filtering content');
         const filterService = new ContentFilterService({ aggressiveness: 'medium' });
-        textToSpeak = filterService.filterForTTS(rawContent);
+        const filteredText = filterService.filterForTTS(rawContent);
 
-        if (!textToSpeak || textToSpeak.trim().length < 100) {
+        Zotero.debug(`TTS: Filtered to ${filteredText.length} chars`);
+
+        if (!filteredText || filteredText.trim().length < 100) {
           Zotero.alert(
             win,
             'Filtering Error',
@@ -352,10 +559,24 @@ var ZoteroSummaryCreator = {
           );
           return;
         }
+
+        // Apply aggressive TTS cleaning
+        textToSpeak = this.cleanTextForTTS(filteredText);
+      }
+
+      // Validate text content
+      if (!textToSpeak || textToSpeak.trim() === '') {
+        throw new Error('Text content is empty after extraction and cleaning');
+      }
+
+      // Additional validation - check for problematic characters
+      if (textToSpeak.length < 10) {
+        throw new Error(`Text too short for TTS: ${textToSpeak.length} characters`);
       }
 
       // Open playback dialog
       Zotero.debug(`TTS: Opening playback dialog with ${textToSpeak.length} characters`);
+      Zotero.debug(`TTS: Dialog URL: ${this.rootURI}chrome/content/tts-dialog.xhtml`);
 
       const io = {
         ttsService: ttsService,
@@ -364,20 +585,35 @@ var ZoteroSummaryCreator = {
         textContent: textToSpeak
       };
 
-      win.openDialog(
-        this.rootURI + 'chrome/content/tts-dialog.xhtml',
+      Zotero.debug(`TTS: IO object keys: ${Object.keys(io).join(', ')}`);
+
+      // Use chrome:// protocol for better compatibility
+      const dialogURL = this.rootURI + 'chrome/content/tts-dialog.xhtml';
+      Zotero.debug(`TTS: Full dialog URL: ${dialogURL}`);
+
+      const dialog = win.openDialog(
+        dialogURL,
         'tts-playback',
-        'chrome,titlebar,toolbar,centerscreen,resizable',
+        'chrome,titlebar,toolbar,centerscreen,resizable,dialog=yes,alwaysRaised=yes',
         io
       );
 
+      Zotero.debug(`TTS: Dialog object: ${dialog ? 'created' : 'null'}`);
+
+      if (dialog) {
+        Zotero.debug(`TTS: Dialog document state: ${dialog.document ? dialog.document.readyState : 'no document'}`);
+        Zotero.debug(`TTS: Dialog location: ${dialog.location ? dialog.location.href : 'no location'}`);
+      }
+
+      Zotero.debug('TTS: Dialog opened successfully');
+
     } catch (error) {
       Zotero.debug(`TTS: Error in playTTSFromContext: ${error}`, 1);
-      Zotero.debug(error.stack, 1);
+      Zotero.debug(`TTS: Error stack: ${error.stack}`, 1);
       Zotero.alert(
         win,
         'TTS Error',
-        `Failed to start TTS playback:\n\n${error.message}`
+        `Failed to start TTS playback:\n\n${error.message}\n\nCheck Help → Debug Output Logging for details.`
       );
     }
   }

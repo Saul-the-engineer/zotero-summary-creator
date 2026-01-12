@@ -3,6 +3,13 @@
  * Manages the TTS playback UI and controls
  */
 
+// Debug: Script loaded
+if (typeof Zotero !== 'undefined') {
+  Zotero.debug('TTS Dialog: Script file loaded');
+} else {
+  console.log('TTS Dialog: Script loaded but Zotero not defined');
+}
+
 var TTSDialog = {
   ttsService: null,
   currentItem: null,
@@ -43,9 +50,16 @@ var TTSDialog = {
 
       // Auto-play if preference enabled
       const prefs = Services.prefs.getBranch('extensions.summarycreator.tts.');
-      if (prefs.getBoolPref('autoPlay', false)) {
+      const autoPlay = prefs.getBoolPref('autoPlay', false);
+
+      Zotero.debug(`TTS Dialog: Auto-play preference is: ${autoPlay}`);
+
+      if (autoPlay) {
         // Give UI a moment to render before starting
+        Zotero.debug('TTS Dialog: Starting auto-play in 500ms');
         setTimeout(() => this.play(), 500);
+      } else {
+        Zotero.debug('TTS Dialog: Auto-play disabled, waiting for user to click Play button');
       }
 
       Zotero.debug('TTS Dialog: Initialization complete');
@@ -376,8 +390,18 @@ var TTSDialog = {
 };
 
 // Initialize when window loads
+Zotero.debug('TTS Dialog: Setting up load event listener');
+
 window.addEventListener('load', () => {
+  Zotero.debug('TTS Dialog: Window load event fired');
+  Zotero.debug(`TTS Dialog: window.arguments = ${window.arguments ? 'defined' : 'undefined'}`);
+
+  if (window.arguments && window.arguments[0]) {
+    Zotero.debug(`TTS Dialog: Arguments passed: ${Object.keys(window.arguments[0]).join(', ')}`);
+  }
+
   TTSDialog.init().catch(error => {
     Zotero.debug(`TTS Dialog: Load error: ${error}`, 1);
+    Zotero.debug(`TTS Dialog: Error stack: ${error.stack}`, 1);
   });
 });
