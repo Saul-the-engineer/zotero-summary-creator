@@ -1,0 +1,105 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<?xml-stylesheet href="chrome://zotero/skin/preferences.css" type="text/css"?>
+
+<!DOCTYPE window>
+
+<window
+    id="summary-creator-preferences"
+    title="Summary Creator Preferences"
+    xmlns="http://www.mozilla.org/keymap/xul"
+    xmlns:html="http://www.w3.org/1999/xhtml">
+
+  <dialog
+      id="summary-creator-prefs-dialog"
+      buttons="accept,cancel"
+      ondialogaccept="return SummaryCreatorPreferences.save();"
+      ondialogcancel="return true;">
+
+    <script src="chrome://zotero/content/include.js"/>
+    <script src="preferences.js"/>
+
+    <html:div style="padding: 10px;">
+      <html:h2>Ollama Configuration</html:h2>
+
+      <html:div style="margin-bottom: 15px;">
+        <html:label for="ollama-url" style="display: block; margin-bottom: 5px; font-weight: bold;">
+          Ollama URL:
+        </html:label>
+        <html:input
+            id="ollama-url"
+            type="text"
+            style="width: 100%; padding: 5px;"
+            placeholder="http://localhost:11434"/>
+        <html:div style="font-size: 11px; color: #666; margin-top: 3px;">
+          The URL where Ollama is running (default: http://localhost:11434)
+        </html:div>
+      </html:div>
+
+      <html:div style="margin-bottom: 15px;">
+        <html:label for="ollama-model" style="display: block; margin-bottom: 5px; font-weight: bold;">
+          Model Name:
+        </html:label>
+        <html:input
+            id="ollama-model"
+            type="text"
+            style="width: 100%; padding: 5px;"
+            placeholder="llama2"/>
+        <html:div style="font-size: 11px; color: #666; margin-top: 3px;">
+          The Ollama model to use (e.g., llama2, mistral, codellama)
+        </html:div>
+      </html:div>
+
+      <html:div style="margin-bottom: 15px;">
+        <html:label style="display: flex; align-items: center; cursor: pointer;">
+          <html:input
+              id="auto-open"
+              type="checkbox"
+              style="margin-right: 8px;"/>
+          <html:span>Automatically open summary note after generation</html:span>
+        </html:label>
+      </html:div>
+
+      <html:hr style="margin: 20px 0;"/>
+
+      <html:h3>Setup Instructions</html:h3>
+
+      <html:div style="font-size: 12px; line-height: 1.6;">
+        <html:p><html:strong>1. Install Ollama:</html:strong></html:p>
+        <html:ul>
+          <html:li>Visit <html:a href="https://ollama.ai" onclick="Zotero.launchURL('https://ollama.ai'); return false;">https://ollama.ai</html:a></html:li>
+          <html:li>Download and install for macOS</html:li>
+        </html:ul>
+
+        <html:p><html:strong>2. Pull a Model:</html:strong></html:p>
+        <html:ul>
+          <html:li>Open Terminal</html:li>
+          <html:li>Run: <html:code style="background: #f0f0f0; padding: 2px 5px;">ollama pull llama2</html:code></html:li>
+        </html:ul>
+
+        <html:p><html:strong>3. Verify Ollama is Running:</html:strong></html:p>
+        <html:ul>
+          <html:li>Ollama should auto-start on macOS</html:li>
+          <html:li>Test by clicking "Test Connection" below</html:li>
+        </html:ul>
+      </html:div>
+
+      <html:div style="margin-top: 15px;">
+        <html:button id="test-connection" onclick="SummaryCreatorPreferences.testConnection(); return false;">
+          Test Connection
+        </html:button>
+        <html:span id="connection-status" style="margin-left: 10px; font-weight: bold;"></html:span>
+      </html:div>
+
+      <html:hr style="margin: 20px 0;"/>
+
+      <html:div style="font-size: 11px; color: #666;">
+        <html:p>
+          <html:strong>Note:</html:strong> This extension sends your paper content to a local Ollama instance.
+          No data is sent to external servers.
+        </html:p>
+      </html:div>
+    </html:div>
+
+  </dialog>
+</window>
