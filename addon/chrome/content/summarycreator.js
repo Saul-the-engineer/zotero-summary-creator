@@ -39,6 +39,9 @@ Zotero.SummaryCreator = {
     const autoOpen = prefs.getBoolPref('autoOpen');
     const autoManageServer = prefs.getBoolPref('autoManageServer');
 
+    Zotero.debug(`Summary Creator: Using model '${ollamaModel}' at URL '${ollamaUrl}'`);
+    Zotero.debug(`Summary Creator: Auto-manage server: ${autoManageServer}, Auto-open: ${autoOpen}`);
+
     // Check if this is batch mode (default: false for single item)
     const isBatchMode = options.batchMode || false;
 
@@ -629,21 +632,28 @@ class OllamaServerManager {
 
 // Ollama Client Adapter
 class OllamaClientAdapter {
-  async createSummary(content, ollamaUrl, model = 'llama2') {
+  async createSummary(content, ollamaUrl, model = 'qwen3:4b') {
     const prompt = this.buildPrompt(content);
+
+    Zotero.debug(`Ollama Client: Requesting model '${model}' at ${ollamaUrl}/api/generate`);
+
+    const requestBody = {
+      model: model,
+      prompt: prompt,
+      stream: false
+    };
 
     const response = await fetch(`${ollamaUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: model,
-        prompt: prompt,
-        stream: false
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
-      throw new Error(`Ollama request failed: ${response.status} ${response.statusText}`);
+      const errorText = await response.text();
+      Zotero.debug(`Ollama Client: Request failed with status ${response.status}`, 1);
+      Zotero.debug(`Ollama Client: Error body: ${errorText}`, 1);
+      throw new Error(`Ollama request failed: ${response.status} ${response.statusText}\nModel requested: ${model}\nError: ${errorText}`);
     }
 
     const data = await response.json();

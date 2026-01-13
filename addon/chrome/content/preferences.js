@@ -9,7 +9,7 @@ var SummaryCreatorPreferences = {
       prefs.getCharPref('ollamaUrl', 'http://localhost:11434');
 
     document.getElementById('ollama-model').value =
-      prefs.getCharPref('ollamaModel', 'llama2');
+      prefs.getCharPref('ollamaModel', 'qwen3:4b');
 
     document.getElementById('auto-open').checked =
       prefs.getBoolPref('autoOpen', true);

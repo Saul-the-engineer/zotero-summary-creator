@@ -52,18 +52,28 @@ var ZoteroSummaryCreator = {
   },
 
   addUI() {
-    // Add to Tools menu
-    const menuitem = Zotero.getMainWindow().document.createXULElement('menuitem');
-    menuitem.id = 'zotero-summarycreator-tools-menu';
-    menuitem.setAttribute('label', 'Summary Creator Preferences...');
-    menuitem.addEventListener('command', () => {
-      this.openPreferences();
-    });
+    Zotero.debug('Summary Creator: Adding UI elements');
 
     const toolsPopup = Zotero.getMainWindow().document.getElementById('menu_ToolsPopup');
-    if (toolsPopup) {
-      toolsPopup.appendChild(menuitem);
+    if (!toolsPopup) {
+      Zotero.debug('Summary Creator: WARNING - Tools menu popup not found!', 2);
+      return;
     }
+
+    // NOTE: Preferences dialog disabled due to freezing issues
+    // Users should change preferences via: Edit → Settings → Advanced → Config Editor
+    // Search for: extensions.summarycreator
+
+    // Add "Show Current Settings" menu item
+    const showSettingsItem = Zotero.getMainWindow().document.createXULElement('menuitem');
+    showSettingsItem.id = 'zotero-summarycreator-show-settings';
+    showSettingsItem.setAttribute('label', 'Summary Creator: Show Current Settings');
+    showSettingsItem.addEventListener('command', () => {
+      this.showCurrentSettings();
+    });
+
+    toolsPopup.appendChild(showSettingsItem);
+    Zotero.debug('Summary Creator: Show Settings menu item added');
 
     // Add context menu item
     const contextMenuItem = Zotero.getMainWindow().document.createXULElement('menuitem');
@@ -129,6 +139,9 @@ var ZoteroSummaryCreator = {
     const toolsMenuItem = doc.getElementById('zotero-summarycreator-tools-menu');
     if (toolsMenuItem) toolsMenuItem.remove();
 
+    const showSettingsItem = doc.getElementById('zotero-summarycreator-show-settings');
+    if (showSettingsItem) showSettingsItem.remove();
+
     const contextMenuItem = doc.getElementById('zotero-summarycreator-context-menu');
     if (contextMenuItem) contextMenuItem.remove();
 
@@ -150,8 +163,16 @@ var ZoteroSummaryCreator = {
     if (!prefBranch.prefHasUserValue('ollamaUrl')) {
       prefBranch.setCharPref('ollamaUrl', 'http://localhost:11434');
     }
-    if (!prefBranch.prefHasUserValue('ollamaModel')) {
-      prefBranch.setCharPref('ollamaModel', 'llama2');
+
+    // Migration: Update old llama2 default to qwen3:4b
+    if (prefBranch.prefHasUserValue('ollamaModel')) {
+      const currentModel = prefBranch.getCharPref('ollamaModel');
+      if (currentModel === 'llama2') {
+        Zotero.debug('Summary Creator: Migrating model from llama2 to qwen3:4b');
+        prefBranch.setCharPref('ollamaModel', 'qwen3:4b');
+      }
+    } else {
+      prefBranch.setCharPref('ollamaModel', 'qwen3:4b');
     }
     if (!prefBranch.prefHasUserValue('autoOpen')) {
       prefBranch.setBoolPref('autoOpen', true);
@@ -177,18 +198,78 @@ var ZoteroSummaryCreator = {
     }
   },
 
+  showCurrentSettings() {
+    const prefs = Services.prefs.getBranch('extensions.summarycreator.');
+    const ollamaUrl = prefs.getCharPref('ollamaUrl', 'NOT SET');
+    const ollamaModel = prefs.getCharPref('ollamaModel', 'NOT SET');
+    const autoOpen = prefs.getBoolPref('autoOpen', true);
+    const autoManageServer = prefs.getBoolPref('autoManageServer', true);
+
+    const message = `Current Settings:
+
+Ollama URL: ${ollamaUrl}
+Model Name: ${ollamaModel}
+Auto-open notes: ${autoOpen ? 'Enabled' : 'Disabled'}
+Auto-manage server: ${autoManageServer ? 'Enabled' : 'Disabled'}
+
+───────────────────────────────
+
+To change these settings:
+
+1. Go to: Edit → Settings → Advanced → Config Editor
+2. Click "I accept the risk!"
+3. Search for: extensions.summarycreator
+4. Double-click the setting you want to change
+5. Enter the new value (e.g., "qwen3:0.6b" for faster model)
+6. Click OK
+7. Restart Zotero
+
+Quick model switch:
+• Search: extensions.summarycreator.ollamaModel
+• Change to: qwen3:0.6b (fast) or qwen3:4b (balanced)`;
+
+    Zotero.alert(
+      Zotero.getMainWindow(),
+      'Summary Creator Settings',
+      message
+    );
+
+    Zotero.debug('Summary Creator: Current settings displayed to user');
+  },
+
   openPreferences() {
+    Zotero.debug('Summary Creator: Opening preferences dialog');
+    Zotero.debug(`Summary Creator: Preferences path: ${this.rootURI}chrome/content/preferences.xhtml`);
+
     const io = {
       dataIn: null,
       dataOut: null
     };
 
-    Zotero.getMainWindow().openDialog(
-      this.rootURI + 'chrome/content/preferences.xhtml',
-      'summary-creator-prefs',
-      'chrome,titlebar,toolbar,centerscreen,modal',
-      io
-    );
+    try {
+      const dialog = Zotero.getMainWindow().openDialog(
+        this.rootURI + 'chrome/content/preferences.xhtml',
+        'summary-creator-prefs',
+        'chrome,titlebar,toolbar,centerscreen,modal',
+        io
+      );
+
+      if (!dialog) {
+        Zotero.debug('Summary Creator: WARNING - Dialog failed to open!', 2);
+      } else {
+        Zotero.debug('Summary Creator: Dialog opened successfully');
+      }
+    } catch (error) {
+      Zotero.debug(`Summary Creator: ERROR opening preferences dialog: ${error.message}`, 1);
+      Zotero.debug(`Summary Creator: Error stack: ${error.stack}`, 1);
+
+      // Show error to user
+      Zotero.alert(
+        Zotero.getMainWindow(),
+        'Preferences Error',
+        `Failed to open preferences dialog:\n\n${error.message}\n\nCheck Help → Debug Output Logging for details.`
+      );
+    }
   },
 
   async generateSummaryFromContext() {
